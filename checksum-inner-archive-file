@@ -1,0 +1,155 @@
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
+
+function zip_list_file_files {
+    unzip -lv "$1" | awk "$(awk_script)"
+}
+export -f zip_list_file_files
+
+function 7z_list_file_files {
+    7z l "$1" | awk "$(awk_script)"
+}
+export -f 7z_list_file_files
+
+function rar_list_file_files {
+    rar l "$1" | awk "$(awk_script)"
+}
+export -f rar_list_file_files
+
+function zip_stream_internal_file {
+    # unzip allows some regex on the filenames specified
+    NEW_INTERNAL="$(echo "$2" | sed 's/\[/\\[/g' | sed 's/\]/\\]/g' | sed 's/\*/\\*/g' | sed 's/\?/\\?/g')"
+    unzip -p "$1" "$NEW_INTERNAL"
+}
+export -f zip_stream_internal_file
+
+function 7z_stream_internal_file {
+    7z e -so "$1" "$2"
+}
+export -f 7z_stream_internal_file
+
+function rar_stream_internal_file {
+    rar p -inul "$1" "$2"
+}
+export -f rar_stream_internal_file
+
+function awk_script {
+    echo 'BEGIN { NAMEPOS=-1; LINE=-1; POS=-1; HEADLINE=0; FOOTERLINE=0; }
+        FOOTERLINE == 1 {
+            next
+        }
+        / Name/ && POS == -1 {
+            POS=index($0, "Name")
+            next
+        }
+        /^\-{5}/ && POS > 0 && NAMEPOS == -1 {
+            NAMEPOS=POS
+            next
+        }
+        /^\-{5}/ && NAMEPOS > -1 {
+            FOOTERLINE=1
+            next
+        }
+        NAMEPOS > -1 { print substr($0, NAMEPOS) }
+        '
+}
+export -f awk_script
+
+function intersperse {
+    awk -v X="$1" '{ print X; print $0 }'
+}
+export -f intersperse
+
+function md5sum_inside {
+    FILETYPE="$1"
+    METHOD="$2"
+    FILENAME="$3"
+    ${FILETYPE}_list_file_files "$FILENAME" | intersperse "$FILENAME" | parallel -N2 -- ${FILETYPE}_stream_internal_file {1} {2} '|' $METHOD '|' tr -d '-' '|' awk -v INTNAME={2} \'{ print \$0 INTNAME }\'
+}
+export -f md5sum_inside
+
+function checksum_stream_to_output_stream {
+    EXTNAME="$1"
+    if [ "$#" -gt 1 ]; then
+        echo -e -n "External Filename\t"
+        echo -n "$1"
+        echo -e "\tInternal Filename"
+        EXTNAME="$2"
+    fi
+    cat | sed 's/^\([^ ]\+\) \+\(.*\)/\t\1\t\2/' | awk -v EXTNAME="$EXTNAME" '{ print EXTNAME $0 }'
+}
+export -f checksum_stream_to_output_stream
+
+function process {
+    FILETYPE="$1"
+    METHOD="$2"
+    HEADER="$3"
+    FILENAME="$4"
+    if [ "$HEADER" -gt 0 ]; then
+        "md5sum_inside" "$FILETYPE" "$METHOD" "$FILENAME" | checksum_stream_to_output_stream "$METHOD" "$FILENAME"
+    else
+        "md5sum_inside" "$FILETYPE" "$METHOD" "$FILENAME" | checksum_stream_to_output_stream "$FILENAME"
+    fi
+}
+export -f process
+
+OPTIND=1
+SHOW_HEADER="1"
+METHOD="md5sum"
+FILETYPE=""
+
+show_help() {
+    echo "$0 [-H] [-m METHOD] FILENAME"
+    echo ""
+    echo "-H = Skip adding the header"
+    echo "-m = Specify the program to use for hashing (defaults to md5sum)"
+    echo "-t = Specify file type if not guessable. Valid values: zip"
+    echo "-h = Displays this help"
+    echo ""
+}
+
+while getopts "hHt:m:" opt; do
+    case "$opt" in
+        m)
+            METHOD="$OPTARG"
+            ;;
+        t)
+            FILETYPE="$OPTARG"
+            ;;
+        H)
+            SHOW_HEADER="0"
+            ;;
+        h)
+            show_help
+            exit 0
+            ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+if [ "$#" -lt 1 ]; then
+    show_help
+    exit 1
+fi
+
+FILENAME="$1"
+
+if echo "$FILENAME" | grep "\.zip$" > /dev/null ; then
+    FILETYPE="zip"
+fi
+
+if echo "$FILENAME" | grep "\.rar$" > /dev/null ; then
+    FILETYPE="rar"
+fi
+
+if echo "$FILENAME" | grep "\.7z$" > /dev/null ; then
+    FILETYPE="7z"
+fi
+
+if [ "$FILETYPE" = "" ]; then
+    echo "Could not determine filtype"
+    exit 1
+fi
+
+process "$FILETYPE" "$METHOD" "$SHOW_HEADER" "$FILENAME"
