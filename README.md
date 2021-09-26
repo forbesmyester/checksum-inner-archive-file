@@ -27,7 +27,7 @@ It outputs a TSV (tab seperated) file.
 ## Requirements
 
  * gnu-parallel
- * awk
+ * gawk
  * bash
  * sed
  * tr
