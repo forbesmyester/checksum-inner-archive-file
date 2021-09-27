@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 function zip_list_file_files {
-    unzip -lv "$1" | gawk "$(gawk_script)"
+    unzip -l "$1" | gawk "$(gawk_script)"
 }
 export -f zip_list_file_files
 
