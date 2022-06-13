@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 function zip_list_file_files {
-    unzip -l "$1" | gawk "$(gawk_script)"
+    unzip -l "$1" | grep -v "^Archive\:" | gawk "$(gawk_script)"
 }
 export -f zip_list_file_files
 
@@ -39,15 +39,15 @@ function gawk_script {
         FOOTERLINE == 1 {
             next
         }
-        / Name/ && POS == -1 {
+        / Name/ && (POS == -1) {
             POS=index($0, "Name")
             next
         }
-        /^\-{5}/ && POS > 0 && NAMEPOS == -1 {
+        /^\-{5}/ && (POS > 0) && (NAMEPOS == -1) {
             NAMEPOS=POS
             next
         }
-        /^\-{5}/ && NAMEPOS > -1 {
+        /^\-{5}/ && (NAMEPOS > -1) {
             FOOTERLINE=1
             next
         }
@@ -64,8 +64,13 @@ export -f intersperse
 function md5sum_inside {
     FILETYPE="$1"
     METHOD="$2"
-    FILENAME="$3"
-    ${FILETYPE}_list_file_files "$FILENAME" | intersperse "$FILENAME" | parallel -N2 -- ${FILETYPE}_stream_internal_file {1} {2} '|' $METHOD '|' tr -d '-' '|' gawk -v INTNAME={2} \'{ print \$0 INTNAME }\'
+    SKIP_BYTES="$3"
+    FILENAME="$4"
+    if [ "$SKIP_BYTES" -eq 0 ]; then
+        ${FILETYPE}_list_file_files "$FILENAME" | intersperse "$FILENAME" | parallel -N2 -- ${FILETYPE}_stream_internal_file {1} {2} '|' $METHOD '|' tr -d '-' '|' gawk -v INTNAME={2} \'{ print \$0 INTNAME }\'
+    else
+        ${FILETYPE}_list_file_files "$FILENAME" | intersperse "$FILENAME" | parallel -N2 -- ${FILETYPE}_stream_internal_file {1} {2} '|' tail -c +"$SKIP_BYTES" '|' $METHOD '|' tr -d '-' '|' gawk -v INTNAME={2} \'{ print \$0 INTNAME }\'
+    fi
 }
 export -f md5sum_inside
 
@@ -85,11 +90,12 @@ function process {
     FILETYPE="$1"
     METHOD="$2"
     HEADER="$3"
-    FILENAME="$4"
+    SKIP_BYTES="$4"
+    FILENAME="$5"
     if [ "$HEADER" -gt 0 ]; then
-        "md5sum_inside" "$FILETYPE" "$METHOD" "$FILENAME" | checksum_stream_to_output_stream "$METHOD" "$FILENAME"
+        "md5sum_inside" "$FILETYPE" "$METHOD" "$SKIP_BYTES" "$FILENAME" | checksum_stream_to_output_stream "$METHOD" "$FILENAME"
     else
-        "md5sum_inside" "$FILETYPE" "$METHOD" "$FILENAME" | checksum_stream_to_output_stream "$FILENAME"
+        "md5sum_inside" "$FILETYPE" "$METHOD" "$SKIP_BYTES" "$FILENAME" | checksum_stream_to_output_stream "$FILENAME"
     fi
 }
 export -f process
@@ -98,24 +104,29 @@ OPTIND=1
 SHOW_HEADER="1"
 METHOD="md5sum"
 FILETYPE=""
+SKIP_BYTES=0
 
 show_help() {
     echo "$0 [-H] [-m METHOD] FILENAME"
     echo ""
     echo "-H = Skip adding the header"
     echo "-m = Specify the program to use for hashing (defaults to md5sum)"
+    echo "-s = Start doing checksum at bit N (skipping 16 bits requires a start of 17)"
     echo "-t = Specify file type if not guessable. Valid values: zip"
     echo "-h = Displays this help"
     echo ""
 }
 
-while getopts "hHt:m:" opt; do
+while getopts "hHt:m:s:" opt; do
     case "$opt" in
         m)
             METHOD="$OPTARG"
             ;;
         t)
             FILETYPE="$OPTARG"
+            ;;
+        s)
+            SKIP_BYTES="$OPTARG"
             ;;
         H)
             SHOW_HEADER="0"
@@ -148,8 +159,8 @@ if echo "$FILENAME" | grep "\.7z$" > /dev/null ; then
 fi
 
 if [ "$FILETYPE" = "" ]; then
-    echo "Could not determine filtype"
+    1>&2 echo "Could not determine filtype for '$FILENAME'"
     exit 1
 fi
 
-process "$FILETYPE" "$METHOD" "$SHOW_HEADER" "$FILENAME"
+process "$FILETYPE" "$METHOD" "$SHOW_HEADER" "$SKIP_BYTES" "$FILENAME"
