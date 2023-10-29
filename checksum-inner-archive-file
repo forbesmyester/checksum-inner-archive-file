@@ -35,23 +35,29 @@ function rar_stream_internal_file {
 export -f rar_stream_internal_file
 
 function gawk_script {
-    echo 'BEGIN { NAMEPOS=-1; LINE=-1; POS=-1; HEADLINE=0; FOOTERLINE=0; }
+    echo 'BEGIN { NAMEPOS=-1; LINE=-1; NAME_POS_INIT=-1; ATTR_POS_INIT=-1; HEADLINE=0; FOOTERLINE=0; }
         FOOTERLINE == 1 {
             next
         }
-        / Name/ && (POS == -1) {
-            POS=index($0, "Name")
+        / Name/ && (NAME_POS_INIT == -1) {
+            NAME_POS_INIT=index($0, "Name")
+            ATTR_POS_INIT=index($0, "Attr")
             next
         }
-        /^\-{5}/ && (POS > 0) && (NAMEPOS == -1) {
-            NAMEPOS=POS
+        /^\-{5}/ && (NAME_POS_INIT > 0) && (NAMEPOS == -1) {
+            NAMEPOS=NAME_POS_INIT
+            ATTRPOS=ATTR_POS_INIT
             next
         }
         /^\-{5}/ && (NAMEPOS > -1) {
             FOOTERLINE=1
             next
         }
-        NAMEPOS > -1 { print substr($0, NAMEPOS) }
+        NAMEPOS > -1 {
+            if (substr($0, ATTRPOS - 1, 1) == ".") {
+                print substr($0, NAMEPOS)
+            }
+        }
         '
 }
 export -f gawk_script
@@ -105,6 +111,8 @@ SHOW_HEADER="1"
 METHOD="md5sum"
 FILETYPE=""
 SKIP_BYTES=0
+STREAM=0
+LIST_ONLY=0
 
 show_help() {
     echo "$0 [-H] [-m METHOD] FILENAME"
@@ -113,11 +121,13 @@ show_help() {
     echo "-m = Specify the program to use for hashing (defaults to md5sum)"
     echo "-s = Start doing checksum at bit N (skipping 16 bits requires a start of 17)"
     echo "-t = Specify file type if not guessable. Valid values: zip"
+    echo "-e = Specify file type if not guessable. Valid values: zip"
+    echo "-l = List internal files"
     echo "-h = Displays this help"
     echo ""
 }
 
-while getopts "hHt:m:s:" opt; do
+while getopts "helHt:m:s:" opt; do
     case "$opt" in
         m)
             METHOD="$OPTARG"
@@ -127,6 +137,12 @@ while getopts "hHt:m:s:" opt; do
             ;;
         s)
             SKIP_BYTES="$OPTARG"
+            ;;
+        l)
+            LIST_ONLY="1"
+            ;;
+        e)
+            STREAM="1"
             ;;
         H)
             SHOW_HEADER="0"
@@ -163,4 +179,21 @@ if [ "$FILETYPE" = "" ]; then
     exit 1
 fi
 
+if [ "$LIST_ONLY" -gt 0 ]; then
+    ${FILETYPE}_list_file_files "$FILENAME"
+    exit 0
+fi
+
+if [ "$STREAM" -gt 0 ]; then
+    shift 1
+    while [ "$#" -gt 0 ] ; do
+        ${FILETYPE}_stream_internal_file "$FILENAME" "$1"
+        shift 1
+    done
+    exit 0
+fi
+
 process "$FILETYPE" "$METHOD" "$SHOW_HEADER" "$SKIP_BYTES" "$FILENAME"
+
+
+exit 0
